@@ -1,0 +1,11 @@
+[workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64"]
+
+[dependencies]
+matplotlib = "*"
+numpy = "*"
+scipy = "*"
+ipykernel = "*"
+xarray = "*"
+ipywidgets = "*"
