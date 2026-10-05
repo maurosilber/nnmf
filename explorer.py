@@ -12,6 +12,7 @@ def _():
     import matplotlib.pyplot as plt
     import numpy as np
     import scipy.ndimage
+    import scipy.stats
 
     from nnmf import (
         WAVELENGTH,
@@ -103,7 +104,6 @@ def _(mo):
         .batch(**controls)
         .form(submit_button_label="Run", bordered=True)
     )
-    settings
     return defaults, settings
 
 
@@ -166,22 +166,11 @@ def _(
         background = camera.background
     else:
         background = 0.0
-    return H, F, K, X, background, masks, s
+    return F, H, K, X, background, masks, s
 
 
 @app.cell
-def _(
-    F,
-    H,
-    X,
-    background,
-    binlets_unmix,
-    fractions,
-    s,
-    scipy,
-    time,
-    unmix,
-):
+def _(F, H, X, background, binlets_unmix, fractions, s, scipy, time, unmix):
     def box(X):
         size = (s["box"], s["box"], 1)
         X = scipy.ndimage.uniform_filter(X, size=size, mode="nearest")
@@ -196,11 +185,14 @@ def _(
     }
 
     estimates, seconds = {"truth": F}, {}
+    models = {"truth": s["photons"] * F @ H}
     for _name, _method in methods.items():
         _start = time.perf_counter()
-        estimates[_name] = fractions(_method(X))[0]
+        _W = _method(X)
         seconds[_name] = time.perf_counter() - _start
-    return estimates, seconds
+        estimates[_name] = fractions(_W)[0]
+        models[_name] = _W @ H
+    return estimates, models, seconds
 
 
 @app.cell
@@ -221,8 +213,7 @@ def _(F, estimates, masks, mo, rmse, seconds):
         selection=None,
         label="RMSE of the fractions (all components), by region",
     )
-    table
-    return
+    return (table,)
 
 
 @app.cell
@@ -246,8 +237,8 @@ def _(K, estimates, plt):
     for _k in range(K):
         axes[_k, 0].set_ylabel(f"f{_k + 1}")
     fig.colorbar(image, ax=axes, shrink=0.6, label="fraction")
-    fig
-    return
+    None
+    return (fig,)
 
 
 @app.cell
@@ -267,7 +258,70 @@ def _(H, WAVELENGTH, X, plt, s):
         title="Measured data",
     )
     right.legend(frameon=False)
-    fig_spectra
+    None
+    return (fig_spectra,)
+
+
+@app.cell
+def _(K, background, masks, models, np, plt, scipy):
+    from matplotlib.colors import LogNorm
+
+    _truth = models["truth"]
+    _sigma = np.sqrt(_truth + background)
+    _methods = {name: m for name, m in models.items() if name != "truth"}
+    fig_residuals, axes_residuals = plt.subplots(
+        2,
+        len(_methods),
+        figsize=(3 * len(_methods), 6),
+        squeeze=False,
+        layout="constrained",
+    )
+    _bins = np.linspace(-3, 3, 61)
+    _x = np.logspace(-3, 3, 301)
+    for _col, (_name, _model) in enumerate(_methods.items()):
+        # Model minus the true expected spectrum, in units of the noise σ.
+        _chi2 = (((_model - _truth) / _sigma) ** 2).sum(-1)
+        _top, _bottom = axes_residuals[:, _col]
+        chi2_image = _top.imshow(
+            _chi2,
+            cmap="magma",
+            norm=LogNorm(1e-2, 1e2, clip=True),
+            interpolation="none",
+        )
+        _top.set_title(f"{_name}\nmean χ² = {_chi2.mean():.2f}")
+        _top.set_xticks([])
+        _top.set_yticks([])
+        _log_chi2 = np.log10(np.clip(_chi2, 1e-3, 1e3))
+        for _region, _mask in masks.items():
+            _bottom.hist(
+                _log_chi2[_mask],
+                bins=_bins,
+                density=True,
+                histtype="step",
+                label=_region,
+            )
+        # Unbiased estimator with the per-pixel noise: χ² with K degrees of freedom.
+        _bottom.plot(
+            np.log10(_x),
+            scipy.stats.chi2(K).pdf(_x) * _x * np.log(10),
+            color="black",
+            lw=1,
+            label=f"χ²({K})",
+        )
+        _bottom.set(xlabel="log₁₀ χ² per pixel")
+    axes_residuals[0, 0].set_ylabel("χ² per pixel")
+    axes_residuals[1, 0].set_ylabel("density per decade")
+    axes_residuals[1, -1].legend(frameon=False, fontsize="small")
+    fig_residuals.colorbar(
+        chi2_image, ax=axes_residuals[0], shrink=0.8, label="χ² vs truth"
+    )
+    None
+    return (fig_residuals,)
+
+
+@app.cell
+def _(fig, fig_residuals, fig_spectra, mo, settings, table):
+    mo.hstack([settings, mo.vstack([fig, table, fig_residuals, fig_spectra])])
     return
 
 
