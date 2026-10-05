@@ -11,6 +11,7 @@ ipykernel = "*"
 xarray = "*"
 ipywidgets = "*"
 binlets = "*"
+marimo = "*"
 
 [pypi-dependencies]
 nnmf = { path = ".", editable = true }
@@ -18,3 +19,4 @@ nnmf = { path = ".", editable = true }
 [tasks]
 experiments = "for f in experiments/*.py; do python $f; done"
 figures = "python report/figures.py"
+explore = "marimo edit explorer.py"
