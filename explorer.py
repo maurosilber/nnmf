@@ -67,6 +67,7 @@ def _(mo):
         "size": 64,
         "box": 7,
         "alpha": 0.01,
+        "repeats": 5,
         "seed": 0,
     }
     d = defaults
@@ -95,6 +96,12 @@ def _(mo):
             steps=[0.2, 0.1, 0.05, 0.01, 0.001],
             value=d["alpha"],
             label="binlets α",
+            show_value=True,
+        ),
+        "repeats": mo.ui.slider(
+            steps=[1, 2, 5, 10, 20],
+            value=d["repeats"],
+            label="noise realizations (for bias)",
             show_value=True,
         ),
         "seed": mo.ui.number(0, 10_000, value=d["seed"], label="seed"),
@@ -159,18 +166,20 @@ def _(
     F, labels = phantom(rng, K, s["size"])
     masks = regions(labels)
 
-    X = measure(rng, F, H, s["photons"])
+    # Independent noise realizations of the same phantom; X is the first.
+    Xs = np.stack([measure(rng, F, H, s["photons"]) for _ in range(s["repeats"])])
     if s["read_noise"] > 0:
         camera = Camera(gain=1.7, read_noise=s["read_noise"] * 1.7)
-        X = camera.to_electrons(camera.digitize(rng, X))
+        Xs = camera.to_electrons(camera.digitize(rng, Xs))
         background = camera.background
     else:
         background = 0.0
-    return F, H, K, X, background, masks, s
+    X = Xs[0]
+    return F, H, K, X, Xs, background, masks, s
 
 
 @app.cell
-def _(F, H, X, background, binlets_unmix, fractions, s, scipy, time, unmix):
+def _(F, H, Xs, background, binlets_unmix, fractions, np, s, scipy, time, unmix):
     def box(X):
         size = (s["box"], s["box"], 1)
         X = scipy.ndimage.uniform_filter(X, size=size, mode="nearest")
@@ -184,36 +193,82 @@ def _(F, H, X, background, binlets_unmix, fractions, s, scipy, time, unmix):
         )[0],
     }
 
-    estimates, seconds = {"truth": F}, {}
+    # Fractions of every realization; maps and models use the first one.
+    estimates, samples, seconds = {"truth": F}, {}, {}
     models = {"truth": s["photons"] * F @ H}
     for _name, _method in methods.items():
         _start = time.perf_counter()
-        _W = _method(X)
-        seconds[_name] = time.perf_counter() - _start
-        estimates[_name] = fractions(_W)[0]
-        models[_name] = _W @ H
-    return estimates, models, seconds
+        _Ws = np.stack([_method(_X) for _X in Xs])
+        seconds[_name] = (time.perf_counter() - _start) / len(Xs)
+        samples[_name] = fractions(_Ws)[0]
+        estimates[_name] = samples[_name][0]
+        models[_name] = _Ws[0] @ H
+    return estimates, models, samples, seconds
 
 
 @app.cell
-def _(F, estimates, masks, mo, rmse, seconds):
+def _(F, masks, mo, np, s, samples, seconds):
+    def errors(f, mask):
+        """RMS over pixels and components, with RMSE² = bias² + std²."""
+        e = f - F
+        return {
+            "RMSE": np.sqrt((e**2).mean(0)[mask].mean()),
+            "bias": np.sqrt((e.mean(0) ** 2)[mask].mean()),
+            "std": np.sqrt(f.var(0)[mask].mean()),
+        }
+
     table = mo.ui.table(
         [
             {
                 "method": name,
-                **{
-                    region: round(rmse(f, F, mask), 4)
-                    for region, mask in masks.items()
-                },
+                "region": region,
+                **{k: round(float(v), 4) for k, v in errors(f, mask).items()},
                 "seconds": round(seconds[name], 2),
             }
-            for name, f in estimates.items()
-            if name != "truth"
+            for name, f in samples.items()
+            for region, mask in masks.items()
         ],
         selection=None,
-        label="RMSE of the fractions (all components), by region",
+        page_size=12,
+        label=(
+            f"Fractions vs truth over {s['repeats']} realizations, by region "
+            "(bias includes std/√realizations of noise)"
+        ),
     )
     return (table,)
+
+
+@app.cell
+def _(F, K, np, plt, samples):
+    _bias = {name: f.mean(0) - F for name, f in samples.items()}
+    _vmax = max(np.percentile(np.abs(b), 99) for b in _bias.values())
+    fig_bias, axes_bias = plt.subplots(
+        K,
+        len(_bias),
+        figsize=(3 * len(_bias), 3 * K),
+        squeeze=False,
+        layout="constrained",
+    )
+    for _col, (_name, _b) in enumerate(_bias.items()):
+        axes_bias[0, _col].set_title(_name)
+        for _k in range(K):
+            _ax = axes_bias[_k, _col]
+            bias_image = _ax.imshow(
+                _b[..., _k],
+                cmap="RdBu_r",
+                vmin=-_vmax,
+                vmax=_vmax,
+                interpolation="none",
+            )
+            _ax.set_xticks([])
+            _ax.set_yticks([])
+    for _k in range(K):
+        axes_bias[_k, 0].set_ylabel(f"f{_k + 1}")
+    fig_bias.colorbar(
+        bias_image, ax=axes_bias, shrink=0.6, label="mean estimate − truth"
+    )
+    None
+    return (fig_bias,)
 
 
 @app.cell
@@ -320,8 +375,10 @@ def _(K, background, masks, models, np, plt, scipy):
 
 
 @app.cell
-def _(fig, fig_residuals, fig_spectra, mo, settings, table):
-    mo.hstack([settings, mo.vstack([fig, table, fig_residuals, fig_spectra])])
+def _(fig, fig_bias, fig_residuals, fig_spectra, mo, settings, table):
+    mo.hstack(
+        [settings, mo.vstack([fig, table, fig_bias, fig_residuals, fig_spectra])]
+    )
     return
 
 
