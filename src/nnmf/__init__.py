@@ -1,5 +1,6 @@
 """Spectral unmixing (NNMF) of Poisson data, its error model, and binlets."""
 
+from .camera import Camera
 from .binning import binlets_unmix, compatibility_test
 from .error_model import (
     chi2_difference,
@@ -21,6 +22,7 @@ from .updates import fit, fit_path, iterate, make_step, unmix
 
 __all__ = [
     "WAVELENGTH",
+    "Camera",
     "binlets_unmix",
     "chi2_difference",
     "chi2_statistic",

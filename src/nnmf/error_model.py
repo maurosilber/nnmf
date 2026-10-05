@@ -1,34 +1,45 @@
 """Error model of the fractions f = W / N when the spectra H are known.
 
-All covariances are per pixel and have the form C(f, H) / N.
+With read noise (Gaussian approximation), channel l has mean
+mu_l = N (f @ H)_l and variance mu_l + background, in photons. With
+background = 0 the covariances have the Poisson form C(f, H) / N.
 """
 
 import numpy as np
 from numpy.typing import NDArray
 
 
-def fisher_information(H: NDArray, f: NDArray) -> NDArray:
-    """Fisher information per photon for the fractions' multinomial model.
+def channel_variance(H: NDArray, f: NDArray, N=1.0, background=0.0) -> NDArray:
+    N = np.asarray(N, dtype=float)[..., None]
+    return N * (f @ H) + background
 
-    Spectrum shape p = f @ H. Returns G = H diag(1/p) H.T, so that the
-    Fisher information for W is G / N.
+
+def fisher_information(H: NDArray, f: NDArray, N=1.0, background=0.0) -> NDArray:
+    """Fisher information for W, H diag(1 / variance) H.T.
+
+    With the defaults, the information per photon of the multinomial model,
+    G = H diag(1/p) H.T with p = f @ H. With background, the information of
+    the mean only (quasi-likelihood), which the reweighted ("gauss")
+    estimator reaches.
     """
-    p = f @ H
-    return np.einsum("...kl,...jl->...kj", H / p[..., None, :], H)
+    v = channel_variance(H, f, N, background)
+    return np.einsum("...kl,...jl->...kj", H / v[..., None, :], H)
 
 
-def cov_w_kl(H: NDArray, f: NDArray) -> NDArray:
-    """Cramér-Rao bound, reached by the Poisson ML (KL) estimator."""
-    return np.linalg.inv(fisher_information(H, f))
+def cov_w_ml(H: NDArray, f: NDArray, N, background) -> NDArray:
+    """Cramér-Rao bound, reached by the Poisson ML (KL) estimator, or the
+    Gaussian-approximation bound with background."""
+    return np.linalg.inv(fisher_information(H, f, N, background))
 
 
-def cov_w_ls(H: NDArray, f: NDArray) -> NDArray:
+def cov_w_ls(H: NDArray, f: NDArray, N, background) -> NDArray:
     """Sandwich covariance of the (unconstrained) least squares estimator."""
     A = np.linalg.solve(H @ H.T, H)
-    return np.einsum("kl,...l,jl->...kj", A, f @ H, A)
+    v = channel_variance(H, f, N, background)
+    return np.einsum("kl,...l,jl->...kj", A, v, A)
 
 
-COV_W = {"kl": cov_w_kl, "ls": cov_w_ls}
+COV_W = {"kl": cov_w_ml, "gauss": cov_w_ml, "ls": cov_w_ls}
 
 
 def fraction_jacobian(f: NDArray) -> NDArray:
@@ -36,11 +47,14 @@ def fraction_jacobian(f: NDArray) -> NDArray:
     return np.eye(f.shape[-1]) - f[..., :, None]
 
 
-def cov_fractions(H: NDArray, f: NDArray, N, loss: str = "kl") -> NDArray:
+def cov_fractions(
+    H: NDArray, f: NDArray, N, loss: str = "kl", background=0.0
+) -> NDArray:
     """Covariance of the estimated fractions, to first order."""
-    N = np.asarray(N, dtype=float)[..., None, None]
     J = fraction_jacobian(f)
-    return J @ COV_W[loss](H, f) @ np.swapaxes(J, -1, -2) / N
+    cov_w = COV_W[loss](H, f, N, background)
+    N = np.asarray(N, dtype=float)[..., None, None]
+    return J @ cov_w @ np.swapaxes(J, -1, -2) / N**2
 
 
 def std_fraction_two_components(h1, h2, f, N):

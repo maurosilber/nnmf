@@ -2,12 +2,17 @@
 
 loss="ls" is the Frobenius update of manual.ipynb; loss="kl" is the
 generalized KL (Poisson maximum likelihood, Richardson-Lucy) update.
+loss="gauss" is the Gaussian approximation for camera data with read noise:
+X in photoelectrons (can be negative) with variance W @ H + background.
+It is a least squares update reweighted by the current variance
+(quasi-likelihood), and reduces to the KL update for background = 0.
 
 An iteration is a pure function `step: (W, H) -> (W, H)`. The sequence of
 iterates is produced lazily by `iterate`, so intermediate results can be
 picked without storing all of them.
 """
 
+import functools
 import itertools
 from collections.abc import Callable, Iterable, Iterator, Sequence
 
@@ -68,7 +73,21 @@ def update_h_kl(W, H, X, eps):
     return H * (W.T @ (X / (W @ H + eps))) / (W.sum(0)[:, None] + eps)
 
 
-UPDATES = {"ls": (update_w_ls, update_h_ls), "kl": (update_w_kl, update_h_kl)}
+def update_w_gauss(W, H, X, eps, background):
+    V = W @ H + background
+    return W * np.clip((X / V) @ H.T, eps, None) / ((W @ H / V) @ H.T + eps)
+
+
+def update_h_gauss(W, H, X, eps, background):
+    V = W @ H + background
+    return H * np.clip(W.T @ (X / V), eps, None) / (W.T @ (W @ H / V) + eps)
+
+
+UPDATES = {
+    "ls": (update_w_ls, update_h_ls),
+    "kl": (update_w_kl, update_h_kl),
+    "gauss": (update_w_gauss, update_h_gauss),
+}
 
 
 def make_step(
@@ -77,6 +96,7 @@ def make_step(
     *,
     loss: str = "kl",
     fixed_h: NDArray | bool = True,
+    background: NDArray | float = 0.0,
     eps: float = EPS,
 ) -> Callable[[State], State]:
     """One iteration (W, H) -> (W, H).
@@ -84,8 +104,12 @@ def make_step(
     fixed_h: True (all spectra known), False (blind), or a boolean mask
     of shape (components,) with the known spectra. Updated spectra are
     renormalized to sum 1, and the scale is moved into W.
+    background: read noise variance per channel, for loss="gauss".
     """
     update_w, update_h = UPDATES[loss]
+    if loss == "gauss":
+        update_w = functools.partial(update_w, background=background)
+        update_h = functools.partial(update_h, background=background)
     fixed_h = np.broadcast_to(fixed_h, H.shape[:1])
 
     if fixed_h.all() and loss == "ls":
@@ -116,10 +140,13 @@ def fit_path(
     at: Sequence[int],
     loss: str = "kl",
     fixed_h: NDArray | bool = True,
+    background: NDArray | float = 0.0,
     eps: float = EPS,
 ) -> tuple[NDArray, NDArray]:
     """W and H after each number of iterations in at, stacked on axis 0."""
-    step = make_step(H, X, loss=loss, fixed_h=fixed_h, eps=eps)
+    step = make_step(
+        H, X, loss=loss, fixed_h=fixed_h, background=background, eps=eps
+    )
     Ws, Hs = zip(*checkpoints(step, (W, H), at))
     return np.stack(Ws), np.stack(Hs)
 
@@ -134,8 +161,11 @@ def fit(W: NDArray, H: NDArray, X: NDArray, *, iterations: int, **kwargs) -> Sta
 
 
 def least_squares_guess(X: NDArray, H: NDArray, eps: float = EPS) -> NDArray:
-    """Unconstrained least squares, clipped to small positive values."""
-    N = X.sum(-1, keepdims=True)
+    """Unconstrained least squares, clipped to small positive values.
+
+    With read noise, a pixel's total N can be negative: then clip at eps.
+    """
+    N = np.maximum(X.sum(-1, keepdims=True), 0)
     W = np.linalg.solve(H @ H.T, H @ X.T).T
     return np.clip(W, 1e-3 * N / len(H) + eps, None)
 
@@ -149,6 +179,7 @@ def unmix(
     X: NDArray,
     H: NDArray,
     *,
+    background: NDArray | float = 0.0,
     max_iterations: int = 1000,
     rtol: float = 1e-4,
     eps: float = EPS,
@@ -158,10 +189,14 @@ def unmix(
     KL multiplicative updates, started from the clipped least-squares
     solution and stopped when the relative change of W is below rtol.
     X can have any number of leading (spatial) dimensions.
+
+    With background (read noise variance per channel, in photoelectrons²),
+    X are camera photoelectrons and the Gaussian approximation is used.
     """
     shape = X.shape[:-1]
     X = X.reshape(-1, X.shape[-1])
-    step = make_step(H, X, loss="kl", eps=eps)
+    loss = "gauss" if np.any(background) else "kl"
+    step = make_step(H, X, loss=loss, background=background, eps=eps)
     W0 = least_squares_guess(X, H, eps)
 
     Ws = itertools.islice(iterate(lambda W: step((W, H))[0], W0), max_iterations + 1)
