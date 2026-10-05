@@ -32,3 +32,14 @@ Reproduce: `pixi run experiments` (writes `results/`), then `pixi run figures`.
    the bound is 3.4× the Poisson one at N = 100. Clipping electrons at 0 and running KL is
    biased (+0.3 to +0.7 bound for N ≤ 1000). The approximation breaks at N = 30, σ = 3 e⁻
    (bound 0.7). `least_squares_guess` now clips at ≥ 0, because totals can be negative.
+8. **Binlets with read noise (exp. 7).** Each half compared at a level sums
+   n = 2^(d(L+1)−1) pixels (d spatial dims), so it carries n × background. The test now
+   sums C(f, N_x) + C(f, N_y), which no longer reduces to C(f)(1/N_x + 1/N_y). At N = 100
+   per pixel the test is calibrated at every level (3–7 % rejections at α = 5 %).
+   Without the n scaling, or with the Poisson test on clipped electrons, it rejects
+   12–59 %. At N = 10 it is conservative at low levels (0–2 %), where the bound exceeds
+   the simplex. RMSE (σ = 2 e⁻): binlets α = 0.01 is best in flat regions and at edges
+   for N ≥ 100 (N = 100: 0.030 / 0.044 vs box7 0.041 / 0.075). At N = 20 it over-merges
+   the gradient (0.31 vs box7 0.11). Poisson binlets on clipped data is 3–5× worse.
+   Without background the output is identical to before. The Gaussian unmixing is slow
+   at low N (binlets 114 s at N = 20 vs 14 s at N = 100).
