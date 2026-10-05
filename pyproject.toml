@@ -1,2 +1,13 @@
+[project]
+name = "nnmf"
+version = "0.1.0"
+description = "Spectral unmixing of Poisson data: multiplicative updates, error model and binlets denoising."
+requires-python = ">=3.12"
+dependencies = ["numpy", "scipy", "binlets"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [tool.ruff.format]
 preview = false

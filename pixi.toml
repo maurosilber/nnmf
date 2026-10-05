@@ -3,9 +3,18 @@ channels = ["conda-forge"]
 platforms = ["osx-arm64"]
 
 [dependencies]
+python = ">=3.12"
 matplotlib = "*"
 numpy = "*"
 scipy = "*"
 ipykernel = "*"
 xarray = "*"
 ipywidgets = "*"
+binlets = "*"
+
+[pypi-dependencies]
+nnmf = { path = ".", editable = true }
+
+[tasks]
+experiments = "for f in experiments/*.py; do python $f; done"
+figures = "python report/figures.py"
