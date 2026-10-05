@@ -151,6 +151,47 @@ def binlets_rmse(N: int = 100):
     return fig
 
 
+def camera_unmixing(read_noise: float = 3.0):
+    """Exp 6: std and bias of f1 relative to the bound, vs photons."""
+    rows = [r for r in load("6_camera_gaussian")["unmixing"]]
+    rows = [r for r in rows if r["read_noise"] == read_noise]
+    methods = {"gauss": ("Gaussian approx.", BLUE), "kl clip": ("clip at 0 + KL", ORANGE)}
+    fig, (left, right) = plt.subplots(1, 2, figsize=(16, 5.6))
+    for method, (label, color) in methods.items():
+        r = [r for r in rows if r["method"] == method]
+        N = [r["N"] for r in r]
+        left.plot(N, [r["std/bound"] for r in r], "o-", color=color, label=label)
+        right.plot(N, [r["bias/bound"] for r in r], "o-", color=color, label=label)
+    reference_line(left, 1.0)
+    reference_line(right, 0.0)
+    for ax in (left, right):
+        ax.set(xscale="log", xlabel="photons per pixel")
+    left.set(ylabel="std(f₁) / bound", ylim=(0, 1.3), title="Spread")
+    right.set(ylabel="bias(f₁) / bound", ylim=(-0.2, 0.8), title="Bias")
+    left.legend(loc="lower right")
+    return fig
+
+
+def binlets_camera_calibration(N: int = 100, read_noise: float = 3.0):
+    """Exp 7: rejection rate per level for each background in the test."""
+    rows = load("7_binlets_camera")["calibration"]
+    rows = [r for r in rows if r["N"] == N and r["read_noise"] == read_noise]
+    tests = {
+        "scaled": ("background × pixels", BLUE),
+        "pixel": ("single-pixel background", ORANGE),
+        "poisson": ("Poisson, clipped at 0", MUTED),
+    }
+    fig, ax = plt.subplots(figsize=(12, 5.6))
+    x = np.arange(len(rows))
+    for test, (label, color) in tests.items():
+        ax.plot(x, [r[test] for r in rows], "o-", color=color, label=label)
+    reference_line(ax, 0.05)
+    ax.set_xticks(x, [f"{r['level']}\n{r['pixels']} px" for r in rows])
+    ax.set(xlabel="level", ylabel="rejection rate", ylim=(0, 0.65))
+    ax.legend(loc="upper left")
+    return fig
+
+
 if __name__ == "__main__":
     FIGURES.mkdir(exist_ok=True)
     figures = {
@@ -158,6 +199,8 @@ if __name__ == "__main__":
         "blind": blind,
         "binlets_maps": binlets_maps,
         "binlets_rmse": binlets_rmse,
+        "camera_unmixing": camera_unmixing,
+        "binlets_camera_calibration": binlets_camera_calibration,
     }
     for name, make in figures.items():
         make().savefig(FIGURES / f"{name}.png", dpi=110, bbox_inches="tight")
